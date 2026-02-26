@@ -1,0 +1,275 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description:
+  AWS Study
+
+Parameters:
+  AMI:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-6.1-x86_64"
+
+Resources:
+  RaiseTechVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsHostnames: 'true'
+      EnableDnsSupport: 'true'
+      InstanceTenancy: default
+
+  RaiseTechIGW:
+    Type: AWS::EC2::InternetGateway
+
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref RaiseTechVPC
+      InternetGatewayId: !Ref RaiseTechIGW
+
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select
+        - 0
+        - Fn::GetAZs: !Ref AWS::Region
+      CidrBlock: 10.0.0.0/24
+      VpcId: !Ref RaiseTechVPC
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select
+        - 1
+        - Fn::GetAZs: !Ref AWS::Region
+      CidrBlock: 10.0.1.0/24
+      VpcId: !Ref RaiseTechVPC
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref RaiseTechVPC
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref RaiseTechIGW
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicRouteTableAssociation1:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet1
+
+  PublicRouteTableAssociation2:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet2
+
+  RaiseTechApplicationLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      IpAddressType: ipv4
+      SecurityGroups:
+        - !Ref LoadBalancerSG
+      Subnets:
+        - !Ref PublicSubnet1
+        - !Ref PublicSubnet2
+      Type: application
+
+  LoadBalancerSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: allow all https inbound access
+      SecurityGroupIngress:
+        - CidrIp: 0.0.0.0/0
+          IpProtocol: tcp
+          ToPort: "443"
+          FromPort: "443"
+        - CidrIp: 0.0.0.0/0
+          IpProtocol: tcp
+          ToPort: "80"
+          FromPort: "80"
+      VpcId: !Ref RaiseTechVPC
+
+  LoadBalancerListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref RaiseTechTargetGroup
+      LoadBalancerArn: !Ref RaiseTechApplicationLoadBalancer
+      Protocol: HTTP
+      Port: "80"
+
+  RaiseTechTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Port: "8080"
+      Protocol: HTTP
+      Targets:
+        - Id: !Ref RaiseTechApp
+      Matcher:
+        HttpCode: "200,300,301"
+      VpcId: !Ref RaiseTechVPC
+
+  Ec2Role:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - Ec2GetParameters
+
+  RaiseTechApp:
+    Type: AWS::EC2::Instance
+    Properties:
+      AvailabilityZone: !Select
+        - 0
+        - Fn::GetAZs: !Ref AWS::Region
+      DisableApiTermination: "false" # 学習用に使用していないときは都度削除し、開始時に都度作成する想定
+      BlockDeviceMappings:
+        - DeviceName: /dev/sdb
+          VirtualName: ephemeral0
+      ImageId: !Ref AMI
+      IamInstanceProfile: !Ref Ec2Role
+      InstanceType: t3.micro
+      KeyName: "raisetech-study"
+      NetworkInterfaces:
+        - DeviceIndex: "0"
+          DeleteOnTermination: "true"
+          AssociatePublicIpAddress: "true"
+          SubnetId: !Ref PublicSubnet1
+          GroupSet:
+            - !Ref Ec2SG
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          dnf update -y
+          dnf -y localinstall https://dev.mysql.com/get/mysql84-community-release-el9-1.noarch.rpm
+          dnf -y install mysql-community-client
+          dnf -y install java-21-amazon-corretto-devel.x86_64
+          dnf -y install git
+          cd /home/ec2-user
+          git clone https://github.com/koujienami/aws-study.git
+          cd /home/ec2-user/aws-study
+          chown -R ec2-user:ec2-user /home/ec2-user/aws-study
+          chmod 755 gradlew
+
+          DB_URL=${Rds.Endpoint.Address}
+          DB_USER=$(aws ssm get-parameter --query "Parameter.Value" --output text --name /raisetech-aws-study/db-master-user --region ${AWS::Region})
+          DB_PASS=$(aws ssm get-parameter --query "Parameter.Value" --output text --name /raisetech-aws-study/db-password --with-decryption --region ${AWS::Region})
+
+          mysql -h ${!DB_URL} -u ${!DB_USER} -p${!DB_PASS} -D raisetech_database << EOF_SQL
+          CREATE TABLE IF NOT EXISTS student (
+          id INT PRIMARY KEY AUTO_INCREMENT,
+          name VARCHAR(255) NOT NULL
+          );
+          INSERT IGNORE INTO student (id, name) VALUES ('1', 'Kouji Enami');
+          EOF_SQL
+
+          cat << EOF_ENV > /etc/sysconfig/app_env
+          SPRING_DATASOURCE_URL=jdbc:mysql://${!DB_URL}:3306/raisetech_database
+          SPRING_DATASOURCE_USERNAME=${!DB_USER}
+          SPRING_DATASOURCE_PASSWORD=${!DB_PASS}
+          EOF_ENV
+
+          chmod 600 /etc/sysconfig/app_env
+
+          cat << EOF_SYSTEMD > /etc/systemd/system/app.service
+          [Unit]
+          Description=Sample App
+          After=network.target
+
+          [Service]
+          User=ec2-user
+          WorkingDirectory=/home/ec2-user/aws-study
+          EnvironmentFile=/etc/sysconfig/app_env
+
+          ExecStart=/home/ec2-user/aws-study/gradlew bootRun
+          Restart=always
+          RestartSec=10
+
+          [Install]
+          WantedBy=multi-user.target
+          EOF_SYSTEMD
+
+          systemctl daemon-reload
+          systemctl enable app.service
+          systemctl start app.service
+
+  Ec2SG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: only EC2 Security Group
+      SecurityGroupIngress:
+        - SourceSecurityGroupId: !Ref LoadBalancerSG
+          IpProtocol: tcp
+          ToPort: "8080"
+          FromPort: "8080"
+        - CidrIp: "0.0.0.0/0"
+          IpProtocol: tcp
+          ToPort: "22"
+          FromPort: "22"
+      VpcId: !Ref RaiseTechVPC
+
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select
+        - 0
+        - Fn::GetAZs: !Ref AWS::Region
+      CidrBlock: 10.0.2.0/24
+      VpcId: !Ref RaiseTechVPC
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select
+        - 1
+        - Fn::GetAZs: !Ref AWS::Region
+      CidrBlock: 10.0.3.0/24
+      VpcId: !Ref RaiseTechVPC
+
+  RdsSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: For Rds
+      DBSubnetGroupName: RdsSubnetGroup
+      SubnetIds:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+
+  RdsSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: only RDS Security Group
+      SecurityGroupIngress:
+        - SourceSecurityGroupId: !Ref Ec2SG
+          IpProtocol: tcp
+          ToPort: "3306"
+          FromPort: "3306"
+      VpcId: !Ref RaiseTechVPC
+
+  Rds:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      AllocatedStorage: "20"
+      AvailabilityZone: !Select
+        - 0
+        - Fn::GetAZs: !Ref AWS::Region
+      DBInstanceClass: db.t4g.micro
+      DBName: raisetech_database
+      DBSubnetGroupName: !Ref RdsSubnetGroup
+      VPCSecurityGroups:
+        - !Ref RdsSG
+      DeleteAutomatedBackups: "true"
+      DeletionProtection: "false"
+      Engine: mysql
+      EngineVersion: "8.4.7"
+      MasterUserPassword: "{{resolve:ssm-secure:/raisetech-aws-study/db-password}}"
+      MasterUsername: "{{resolve:ssm:/raisetech-aws-study/db-master-user}}"
+      MultiAZ: "false"
+      PubliclyAccessible: "false"
+      StorageType: gp3
+    DeletionPolicy: Delete
