@@ -219,10 +219,6 @@ Resources:
           IpProtocol: tcp
           ToPort: "8080"
           FromPort: "8080"
-        - CidrIp: "0.0.0.0/0" # 検証用にSSHを許可
-          IpProtocol: tcp
-          ToPort: "22"
-          FromPort: "22"
       VpcId: !Ref RaiseTechVPC
       Tags:
         - Key: Name
