@@ -128,7 +128,7 @@ Resources:
     Type: AWS::IAM::InstanceProfile
     Properties:
       Roles:
-        - Ec2GetParameters
+        - Ec2GetParameters # このロールはマネジメントコンソールで作成済
 
   RaiseTechApp:
     Type: AWS::EC2::Instance
