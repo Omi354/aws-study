@@ -16,6 +16,9 @@ Resources:
       EnableDnsHostnames: 'true'
       EnableDnsSupport: 'true'
       InstanceTenancy: default
+      Tags:
+        - Key: Name
+          Value: raise-tech-vpc
 
   RaiseTechIGW:
     Type: AWS::EC2::InternetGateway
@@ -78,6 +81,9 @@ Resources:
         - !Ref PublicSubnet1
         - !Ref PublicSubnet2
       Type: application
+      Tags:
+        - Key: Name
+          Value: raise-tech-alb
 
   LoadBalancerSG:
     Type: AWS::EC2::SecurityGroup
@@ -93,6 +99,9 @@ Resources:
           ToPort: "80"
           FromPort: "80"
       VpcId: !Ref RaiseTechVPC
+      Tags:
+        - Key: Name
+          Value: raise-tech-alb-sg
 
   LoadBalancerListener:
     Type: AWS::ElasticLoadBalancingV2::Listener
@@ -197,6 +206,9 @@ Resources:
           systemctl daemon-reload
           systemctl enable app.service
           systemctl start app.service
+      Tags:
+        - Key: Name
+          Value: raise-tech-ec2
 
   Ec2SG:
     Type: AWS::EC2::SecurityGroup
@@ -207,11 +219,14 @@ Resources:
           IpProtocol: tcp
           ToPort: "8080"
           FromPort: "8080"
-        - CidrIp: "0.0.0.0/0"
+        - CidrIp: "0.0.0.0/0" # 検証用にSSHを許可
           IpProtocol: tcp
           ToPort: "22"
           FromPort: "22"
       VpcId: !Ref RaiseTechVPC
+      Tags:
+        - Key: Name
+          Value: raise-tech-ec2-sg
 
   PrivateSubnet1:
     Type: AWS::EC2::Subnet
@@ -250,6 +265,9 @@ Resources:
           ToPort: "3306"
           FromPort: "3306"
       VpcId: !Ref RaiseTechVPC
+      Tags:
+        - Key: Name
+          Value: raise-tech-db-sg
 
   Rds:
     Type: AWS::RDS::DBInstance
@@ -272,4 +290,7 @@ Resources:
       MultiAZ: "false"
       PubliclyAccessible: "false"
       StorageType: gp3
-    DeletionPolicy: Delete
+      Tags:
+        - Key: Name
+          Value: raise-tech-db
+    DeletionPolicy: Delete # スナップショットを残さない
