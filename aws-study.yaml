@@ -165,11 +165,10 @@ Resources:
           chown -R ec2-user:ec2-user /home/ec2-user/aws-study
           chmod 755 gradlew
 
-          DB_URL=${Rds.Endpoint.Address}
           DB_USER=$(aws ssm get-parameter --query "Parameter.Value" --output text --name /raisetech-aws-study/db-master-user --region ${AWS::Region})
           DB_PASS=$(aws ssm get-parameter --query "Parameter.Value" --output text --name /raisetech-aws-study/db-password --with-decryption --region ${AWS::Region})
 
-          mysql -h ${!DB_URL} -u ${!DB_USER} -p${!DB_PASS} -D raisetech_database << EOF_SQL
+          mysql -h ${Rds.Endpoint.Address} -u ${!DB_USER} -p${!DB_PASS} -D raisetech_database << EOF_SQL
           CREATE TABLE IF NOT EXISTS student (
           id INT PRIMARY KEY AUTO_INCREMENT,
           name VARCHAR(255) NOT NULL
@@ -178,7 +177,7 @@ Resources:
           EOF_SQL
 
           cat << EOF_ENV > /etc/sysconfig/app_env
-          SPRING_DATASOURCE_URL=jdbc:mysql://${!DB_URL}:3306/raisetech_database
+          SPRING_DATASOURCE_URL=jdbc:mysql://${Rds.Endpoint.Address}:${Rds.Endpoint.Port}/raisetech_database
           SPRING_DATASOURCE_USERNAME=${!DB_USER}
           SPRING_DATASOURCE_PASSWORD=${!DB_PASS}
           EOF_ENV
