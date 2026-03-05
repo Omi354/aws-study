@@ -124,11 +124,41 @@ Resources:
         HttpCode: "200,300,301"
       VpcId: !Ref RaiseTechVPC
 
+  Ec2GetParameters:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      RoleName: Ec2GetParameters
+
+  RolePolicies:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: SsmGetParams
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - ssm:GetParametersByPath
+              - ssm:GetParameters
+              - ssm:GetParameter
+            Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/raisetech-aws-study/*
+      Roles:
+        - Ref: Ec2GetParameters
+
   Ec2Role:
     Type: AWS::IAM::InstanceProfile
     Properties:
       Roles:
-        - Ec2GetParameters # このロールはマネジメントコンソールで作成済
+        - !Ref Ec2GetParameters
 
   RaiseTechApp:
     Type: AWS::EC2::Instance
@@ -279,7 +309,7 @@ Resources:
       DeleteAutomatedBackups: "true"
       DeletionProtection: "false"
       Engine: mysql
-      EngineVersion: "8.4.7"
+      EngineVersion: "8.0.43"
       MasterUserPassword: "{{resolve:ssm-secure:/raisetech-aws-study/db-password}}"
       MasterUsername: "{{resolve:ssm:/raisetech-aws-study/db-master-user}}"
       MultiAZ: "false"
