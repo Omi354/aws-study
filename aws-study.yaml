@@ -7,14 +7,17 @@ Parameters:
   AMI:
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
     Default: "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-6.1-x86_64"
+  Threshold:
+    Type: Number
+    Default: "70"
 
 Resources:
   RaiseTechVPC:
     Type: AWS::EC2::VPC
     Properties:
       CidrBlock: 10.0.0.0/16
-      EnableDnsHostnames: 'true'
-      EnableDnsSupport: 'true'
+      EnableDnsHostnames: "true"
+      EnableDnsSupport: "true"
       InstanceTenancy: default
       Tags:
         - Key: Name
@@ -319,3 +322,47 @@ Resources:
         - Key: Name
           Value: raise-tech-db
     DeletionPolicy: Delete # スナップショットを残さない
+
+  Ec2CpuUtilizationAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      ### 基本設定
+      AlarmName: high-cpu-utilization-over-1percent
+
+      ### メトリクス
+      Namespace: AWS/EC2
+      Dimensions:
+        - Name: InstanceId
+          Value: !Ref RaiseTechApp
+      MetricName: CPUUtilization
+      Unit: Percent
+
+      ### 統計
+      Period: 300
+      Statistic: "Average"
+
+      ### 評価
+      Threshold: !Ref Threshold
+      ComparisonOperator: "GreaterThanOrEqualToThreshold"
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      TreatMissingData: "missing"
+
+      ### アクション
+      ActionsEnabled: "true"
+      AlarmActions:
+        - !Ref AlarmTopic
+
+  AlarmTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      Subscription:
+        - !Ref EmailSubscription
+      TopicName: AwsStudyEc2CpuAlarm
+
+  EmailSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Endpoint: bell.tsaeb.shoji@gmail.com
+      Protocol: email
+      TopicArn: !Ref AlarmTopic
