@@ -127,7 +127,7 @@ Resources:
         HttpCode: "200,300,301"
       VpcId: !Ref RaiseTechVPC
 
-  Ec2GetParameters:
+  RaiseTechAppEc2Role:
     Type: AWS::IAM::Role
     Properties:
       AssumeRolePolicyDocument:
@@ -139,9 +139,12 @@ Resources:
                 - ec2.amazonaws.com
             Action:
               - sts:AssumeRole
-      RoleName: Ec2GetParameters
+      RoleName: RaiseTechAppEc2Role
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonSSMManagedInstanceCore
+        - arn:aws:iam::aws:policy/service-role/CloudWatchAgentServerPolicy
 
-  RolePolicies:
+  SsmGetParamsPolicy:
     Type: AWS::IAM::Policy
     Properties:
       PolicyName: SsmGetParams
@@ -155,13 +158,13 @@ Resources:
               - ssm:GetParameter
             Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/raisetech-aws-study/*
       Roles:
-        - Ref: Ec2GetParameters
+        - Ref: RaiseTechAppEc2Role
 
-  Ec2Role:
+  RaiseTechAppInstanceProfile:
     Type: AWS::IAM::InstanceProfile
     Properties:
       Roles:
-        - !Ref Ec2GetParameters
+        - !Ref RaiseTechAppEc2Role
 
   RaiseTechApp:
     Type: AWS::EC2::Instance
@@ -174,7 +177,7 @@ Resources:
         - DeviceName: /dev/sdb
           VirtualName: ephemeral0
       ImageId: !Ref AMI
-      IamInstanceProfile: !Ref Ec2Role
+      IamInstanceProfile: !Ref RaiseTechAppInstanceProfile
       InstanceType: t3.micro
       KeyName: "raisetech-study"
       NetworkInterfaces:
@@ -356,8 +359,6 @@ Resources:
   AlarmTopic:
     Type: AWS::SNS::Topic
     Properties:
-      Subscription:
-        - !Ref EmailSubscription
       TopicName: AwsStudyEc2CpuAlarm
 
   EmailSubscription:
