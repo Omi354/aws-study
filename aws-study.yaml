@@ -141,8 +141,8 @@ Resources:
               - sts:AssumeRole
       RoleName: RaiseTechAppEc2Role
       ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AmazonSSMManagedInstanceCore
-        - arn:aws:iam::aws:policy/service-role/CloudWatchAgentServerPolicy
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+        - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
 
   SsmGetParamsPolicy:
     Type: AWS::IAM::Policy
@@ -165,6 +165,47 @@ Resources:
     Properties:
       Roles:
         - !Ref RaiseTechAppEc2Role
+
+  InitAndRunCloudWatchDocument:
+    Type: AWS::SSM::Document
+    Properties:
+      DocumentFormat: YAML
+      DocumentType: Command
+      Name: InitAndRunCloudWatchDocument
+      Content:
+        schemaVersion: '2.2'
+        mainSteps:
+        - name: InstallCloudWatchAgent
+          action: 'aws:runDocument'
+          inputs:
+            documentType: SSMDocument
+            documentPath: AWS-ConfigureAWSPackage
+            documentParameters:
+              action: Install
+              name: AmazonCloudWatchAgent
+              version: latest
+
+        - name: ConfigureCloudWatchAgent
+          action: 'aws:runDocument'
+          inputs:
+            documentType: SSMDocument
+            documentPath: AmazonCloudWatch-ManageAgent
+            documentParameters:
+              action: configure
+              mode: ec2
+              optionalConfigurationSource: ssm
+              optionalConfigurationLocation: AmazonCloudWatch-linux
+              optionalRestart: "yes"
+
+  InitAndRunCloudWatchAssociation:
+    Type: AWS::SSM::Association
+    Properties:
+      AssociationName: InitAndRunCloudWatchAssociation
+      Name: !Ref InitAndRunCloudWatchDocument
+      Targets:
+        - Key: InstanceIds
+          Values:
+            - !Ref RaiseTechApp
 
   RaiseTechApp:
     Type: AWS::EC2::Instance
@@ -195,6 +236,10 @@ Resources:
           dnf -y install mysql-community-client
           dnf -y install java-21-amazon-corretto-devel.x86_64
           dnf -y install git
+          dnf -y install rsyslog
+          systemctl enable rsyslog
+          systemctl start rsyslog
+
           cd /home/ec2-user
           git clone https://github.com/koujienami/aws-study.git
           cd /home/ec2-user/aws-study
@@ -241,6 +286,7 @@ Resources:
           systemctl daemon-reload
           systemctl enable app.service
           systemctl start app.service
+
       Tags:
         - Key: Name
           Value: raise-tech-ec2
