@@ -175,6 +175,21 @@ Resources:
       Content:
         schemaVersion: '2.2'
         mainSteps:
+        - name: InstallBasePackages
+          action: 'aws:runShellScript'
+          inputs:
+            runCommand:
+              - |
+                #!/bin/bash -x
+                dnf update -y
+                dnf -y localinstall https://dev.mysql.com/get/mysql84-community-release-el9-1.noarch.rpm
+                dnf -y install mysql-community-client
+                dnf -y install java-21-amazon-corretto-devel.x86_64
+                dnf -y install git
+                dnf -y install rsyslog
+                systemctl enable rsyslog
+                systemctl start rsyslog
+
         - name: InstallCloudWatchAgent
           action: 'aws:runDocument'
           inputs:
@@ -196,6 +211,59 @@ Resources:
               optionalConfigurationSource: ssm
               optionalConfigurationLocation: AmazonCloudWatch-linux
               optionalRestart: "yes"
+
+        - name: SetUpApplication
+          action: 'aws:runShellScript'
+          inputs:
+            runCommand:
+              - !Sub |
+                  #!/bin/bash -x
+                  cd /home/ec2-user
+                  git clone https://github.com/koujienami/aws-study.git
+                  cd /home/ec2-user/aws-study
+                  chown -R ec2-user:ec2-user /home/ec2-user/aws-study
+                  chmod 755 gradlew
+
+                  DB_USER=$(aws ssm get-parameter --query "Parameter.Value" --output text --name /raisetech-aws-study/db-master-user --region ${AWS::Region})
+                  DB_PASS=$(aws ssm get-parameter --query "Parameter.Value" --output text --name /raisetech-aws-study/db-password --with-decryption --region ${AWS::Region})
+
+                  mysql -h ${Rds.Endpoint.Address} -u ${!DB_USER} -p${!DB_PASS} -D raisetech_database << EOF_SQL
+                  CREATE TABLE IF NOT EXISTS student (
+                    id INT PRIMARY KEY AUTO_INCREMENT,
+                    name VARCHAR(255) NOT NULL
+                  );
+                  INSERT IGNORE INTO student (id, name) VALUES ('1', 'Kouji Enami');
+                  EOF_SQL
+
+                  cat << EOF_ENV > /etc/sysconfig/app_env
+                  SPRING_DATASOURCE_URL=jdbc:mysql://${Rds.Endpoint.Address}:${Rds.Endpoint.Port}/raisetech_database
+                  SPRING_DATASOURCE_USERNAME=${!DB_USER}
+                  SPRING_DATASOURCE_PASSWORD=${!DB_PASS}
+                  EOF_ENV
+
+                  chmod 600 /etc/sysconfig/app_env
+
+                  cat << EOF_SYSTEMD > /etc/systemd/system/app.service
+                  [Unit]
+                  Description=Sample App
+                  After=network.target
+
+                  [Service]
+                  User=ec2-user
+                  WorkingDirectory=/home/ec2-user/aws-study
+                  EnvironmentFile=/etc/sysconfig/app_env
+
+                  ExecStart=/home/ec2-user/aws-study/gradlew bootRun
+                  Restart=always
+                  RestartSec=10
+
+                  [Install]
+                  WantedBy=multi-user.target
+                  EOF_SYSTEMD
+
+                  systemctl daemon-reload
+                  systemctl enable app.service
+                  systemctl start app.service
 
   InitAndRunCloudWatchAssociation:
     Type: AWS::SSM::Association
@@ -228,65 +296,6 @@ Resources:
           SubnetId: !Ref PublicSubnet1
           GroupSet:
             - !Ref Ec2SG
-      UserData:
-        Fn::Base64: !Sub |
-          #!/bin/bash
-          dnf update -y
-          dnf -y localinstall https://dev.mysql.com/get/mysql84-community-release-el9-1.noarch.rpm
-          dnf -y install mysql-community-client
-          dnf -y install java-21-amazon-corretto-devel.x86_64
-          dnf -y install git
-          dnf -y install rsyslog
-          systemctl enable rsyslog
-          systemctl start rsyslog
-
-          cd /home/ec2-user
-          git clone https://github.com/koujienami/aws-study.git
-          cd /home/ec2-user/aws-study
-          chown -R ec2-user:ec2-user /home/ec2-user/aws-study
-          chmod 755 gradlew
-
-          DB_USER=$(aws ssm get-parameter --query "Parameter.Value" --output text --name /raisetech-aws-study/db-master-user --region ${AWS::Region})
-          DB_PASS=$(aws ssm get-parameter --query "Parameter.Value" --output text --name /raisetech-aws-study/db-password --with-decryption --region ${AWS::Region})
-
-          mysql -h ${Rds.Endpoint.Address} -u ${!DB_USER} -p${!DB_PASS} -D raisetech_database << EOF_SQL
-          CREATE TABLE IF NOT EXISTS student (
-          id INT PRIMARY KEY AUTO_INCREMENT,
-          name VARCHAR(255) NOT NULL
-          );
-          INSERT IGNORE INTO student (id, name) VALUES ('1', 'Kouji Enami');
-          EOF_SQL
-
-          cat << EOF_ENV > /etc/sysconfig/app_env
-          SPRING_DATASOURCE_URL=jdbc:mysql://${Rds.Endpoint.Address}:${Rds.Endpoint.Port}/raisetech_database
-          SPRING_DATASOURCE_USERNAME=${!DB_USER}
-          SPRING_DATASOURCE_PASSWORD=${!DB_PASS}
-          EOF_ENV
-
-          chmod 600 /etc/sysconfig/app_env
-
-          cat << EOF_SYSTEMD > /etc/systemd/system/app.service
-          [Unit]
-          Description=Sample App
-          After=network.target
-
-          [Service]
-          User=ec2-user
-          WorkingDirectory=/home/ec2-user/aws-study
-          EnvironmentFile=/etc/sysconfig/app_env
-
-          ExecStart=/home/ec2-user/aws-study/gradlew bootRun
-          Restart=always
-          RestartSec=10
-
-          [Install]
-          WantedBy=multi-user.target
-          EOF_SYSTEMD
-
-          systemctl daemon-reload
-          systemctl enable app.service
-          systemctl start app.service
-
       Tags:
         - Key: Name
           Value: raise-tech-ec2
@@ -376,7 +385,7 @@ Resources:
     Type: AWS::CloudWatch::Alarm
     Properties:
       ### 基本設定
-      AlarmName: high-cpu-utilization-over-1percent
+      AlarmName: high-cpu-utilization
 
       ### メトリクス
       Namespace: AWS/EC2
