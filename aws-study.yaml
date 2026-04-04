@@ -462,8 +462,59 @@ Resources:
         CloudWatchMetricsEnabled: true
         MetricName: LoadBalancerWebACL
 
-  SampleWebACLAssociation:
+  WebACLAssociation:
     Type: 'AWS::WAFv2::WebACLAssociation'
     Properties:
       WebACLArn: !GetAtt LoadBalancerWebACL.Arn
       ResourceArn: !GetAtt RaiseTechApplicationLoadBalancer.LoadBalancerArn
+
+  WAFLogConfig:
+    Type: AWS::WAFv2::LoggingConfiguration
+    Properties:
+      LogDestinationConfigs:
+        - !GetAtt WebACLLogGroup.Arn
+      ResourceArn: !GetAtt LoadBalancerWebACL.Arn
+
+  WebACLLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      DeletionProtectionEnabled: false
+      LogGroupClass: STANDARD
+      LogGroupName: aws-waf-logs-alb-acl
+      RetentionInDays: 1
+      Tags:
+        - Key: Name
+          Value: aws-waf-logs-alb-acl
+
+  WAFToCWLogsPolicy:
+    Type: AWS::Logs::ResourcePolicy
+    Properties:
+      PolicyName: WAFToCWLogsPolicy
+      PolicyDocument:
+        Fn::Sub:
+          - |
+            {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Principal": {
+                    "Service": "delivery.logs.amazonaws.com"
+                  },
+                  "Action": [
+                    "logs:CreateLogStream",
+                    "logs:PutLogEvents"
+                  ],
+                  "Resource": "${CloudWatchLogsLogGroupArn}",
+                  "Condition": {
+                    "StringEquals": {
+                      "aws:SourceAccount": "${AWS::AccountId}"
+                    },
+                    "ArnLike": {
+                      "aws:SourceArn": "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:*"
+                    }
+                  }
+                }
+              ]
+            }
+          - CloudWatchLogsLogGroupArn: !GetAtt WebACLLogGroup.Arn
