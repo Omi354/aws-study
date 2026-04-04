@@ -23,6 +23,15 @@ Resources:
         - Key: Name
           Value: raise-tech-vpc
 
+  S3GatewayEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      RouteTableIds:
+        - !Ref PublicRouteTable
+      VpcId: !Ref RaiseTechVPC
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.s3
+      VpcEndpointType: Gateway
+
   RaiseTechIGW:
     Type: AWS::EC2::InternetGateway
 
