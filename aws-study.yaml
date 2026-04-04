@@ -431,3 +431,39 @@ Resources:
       Endpoint: bell.tsaeb.shoji@gmail.com
       Protocol: email
       TopicArn: !Ref AlarmTopic
+
+  LoadBalancerWebACL:
+    Type: AWS::WAFv2::WebACL
+    Properties:
+      DefaultAction:
+        Allow: {}
+      Description: Protect with core rules
+      Name: LoadBalancerWebACL
+      Rules:
+        - Name: CoreRuleSet
+          Priority: 0
+          OverrideAction:
+            None: {}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesCommonRuleSet
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: CoreRuleSet
+
+      Scope: REGIONAL
+      Tags:
+        - Key: Name
+          Value: load-balancer-waf
+      VisibilityConfig:
+        SampledRequestsEnabled: true
+        CloudWatchMetricsEnabled: true
+        MetricName: LoadBalancerWebACL
+
+  SampleWebACLAssociation:
+    Type: 'AWS::WAFv2::WebACLAssociation'
+    Properties:
+      WebACLArn: !GetAtt LoadBalancerWebACL.Arn
+      ResourceArn: !GetAtt RaiseTechApplicationLoadBalancer.LoadBalancerArn
