@@ -1,0 +1,16 @@
+{
+"Version":"2012-10-17",
+"Id": "BucketPolicy",
+"Statement": [{
+  "Sid": "AllAcceptForMyEc2",
+  "Principal": {
+    "AWS": "arn:aws:iam::253490794855:role/RaiseTechAppEc2Role"
+  },
+  "Effect": "Allow",
+  "Action": "s3:*",
+  "Resource": [
+    "arn:aws:s3:::aws-study-253490794855-ap-northeast-1-an",
+    "arn:aws:s3:::aws-study-253490794855-ap-northeast-1-an/*"
+  ]
+  }]
+}

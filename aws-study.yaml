@@ -7,18 +7,30 @@ Parameters:
   AMI:
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
     Default: "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-6.1-x86_64"
+  Threshold:
+    Type: Number
+    Default: "70"
 
 Resources:
   RaiseTechVPC:
     Type: AWS::EC2::VPC
     Properties:
       CidrBlock: 10.0.0.0/16
-      EnableDnsHostnames: 'true'
-      EnableDnsSupport: 'true'
+      EnableDnsHostnames: "true"
+      EnableDnsSupport: "true"
       InstanceTenancy: default
       Tags:
         - Key: Name
           Value: raise-tech-vpc
+
+  S3GatewayEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      RouteTableIds:
+        - !Ref PublicRouteTable
+      VpcId: !Ref RaiseTechVPC
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.s3
+      VpcEndpointType: Gateway
 
   RaiseTechIGW:
     Type: AWS::EC2::InternetGateway
@@ -124,7 +136,7 @@ Resources:
         HttpCode: "200,300,301"
       VpcId: !Ref RaiseTechVPC
 
-  Ec2GetParameters:
+  RaiseTechAppEc2Role:
     Type: AWS::IAM::Role
     Properties:
       AssumeRolePolicyDocument:
@@ -136,9 +148,12 @@ Resources:
                 - ec2.amazonaws.com
             Action:
               - sts:AssumeRole
-      RoleName: Ec2GetParameters
+      RoleName: RaiseTechAppEc2Role
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+        - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
 
-  RolePolicies:
+  SsmGetParamsPolicy:
     Type: AWS::IAM::Policy
     Properties:
       PolicyName: SsmGetParams
@@ -152,13 +167,122 @@ Resources:
               - ssm:GetParameter
             Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/raisetech-aws-study/*
       Roles:
-        - Ref: Ec2GetParameters
+        - Ref: RaiseTechAppEc2Role
 
-  Ec2Role:
+  RaiseTechAppInstanceProfile:
     Type: AWS::IAM::InstanceProfile
     Properties:
       Roles:
-        - !Ref Ec2GetParameters
+        - !Ref RaiseTechAppEc2Role
+
+  InitAndRunCloudWatchDocument:
+    Type: AWS::SSM::Document
+    Properties:
+      DocumentFormat: YAML
+      DocumentType: Command
+      Name: InitAndRunCloudWatchDocument
+      Content:
+        schemaVersion: '2.2'
+        mainSteps:
+        - name: InstallBasePackages
+          action: 'aws:runShellScript'
+          inputs:
+            runCommand:
+              - |
+                #!/bin/bash -x
+                dnf update -y
+                dnf -y localinstall https://dev.mysql.com/get/mysql84-community-release-el9-1.noarch.rpm
+                dnf -y install mysql-community-client
+                dnf -y install java-21-amazon-corretto-devel.x86_64
+                dnf -y install git
+                dnf -y install rsyslog
+                systemctl enable rsyslog
+                systemctl start rsyslog
+
+        - name: InstallCloudWatchAgent
+          action: 'aws:runDocument'
+          inputs:
+            documentType: SSMDocument
+            documentPath: AWS-ConfigureAWSPackage
+            documentParameters:
+              action: Install
+              name: AmazonCloudWatchAgent
+              version: latest
+
+        - name: ConfigureCloudWatchAgent
+          action: 'aws:runDocument'
+          inputs:
+            documentType: SSMDocument
+            documentPath: AmazonCloudWatch-ManageAgent
+            documentParameters:
+              action: configure
+              mode: ec2
+              optionalConfigurationSource: ssm
+              optionalConfigurationLocation: AmazonCloudWatch-linux
+              optionalRestart: "yes"
+
+        - name: SetUpApplication
+          action: 'aws:runShellScript'
+          inputs:
+            runCommand:
+              - !Sub |
+                  #!/bin/bash -x
+                  cd /home/ec2-user
+                  git clone https://github.com/koujienami/aws-study.git
+                  cd /home/ec2-user/aws-study
+                  chown -R ec2-user:ec2-user /home/ec2-user/aws-study
+                  chmod 755 gradlew
+
+                  DB_USER=$(aws ssm get-parameter --query "Parameter.Value" --output text --name /raisetech-aws-study/db-master-user --region ${AWS::Region})
+                  DB_PASS=$(aws ssm get-parameter --query "Parameter.Value" --output text --name /raisetech-aws-study/db-password --with-decryption --region ${AWS::Region})
+
+                  mysql -h ${Rds.Endpoint.Address} -u ${!DB_USER} -p${!DB_PASS} -D raisetech_database << EOF_SQL
+                  CREATE TABLE IF NOT EXISTS student (
+                    id INT PRIMARY KEY AUTO_INCREMENT,
+                    name VARCHAR(255) NOT NULL
+                  );
+                  INSERT IGNORE INTO student (id, name) VALUES ('1', 'Kouji Enami');
+                  EOF_SQL
+
+                  cat << EOF_ENV > /etc/sysconfig/app_env
+                  SPRING_DATASOURCE_URL=jdbc:mysql://${Rds.Endpoint.Address}:${Rds.Endpoint.Port}/raisetech_database
+                  SPRING_DATASOURCE_USERNAME=${!DB_USER}
+                  SPRING_DATASOURCE_PASSWORD=${!DB_PASS}
+                  EOF_ENV
+
+                  chmod 600 /etc/sysconfig/app_env
+
+                  cat << EOF_SYSTEMD > /etc/systemd/system/app.service
+                  [Unit]
+                  Description=Sample App
+                  After=network.target
+
+                  [Service]
+                  User=ec2-user
+                  WorkingDirectory=/home/ec2-user/aws-study
+                  EnvironmentFile=/etc/sysconfig/app_env
+
+                  ExecStart=/home/ec2-user/aws-study/gradlew bootRun
+                  Restart=always
+                  RestartSec=10
+
+                  [Install]
+                  WantedBy=multi-user.target
+                  EOF_SYSTEMD
+
+                  systemctl daemon-reload
+                  systemctl enable app.service
+                  systemctl start app.service
+
+  InitAndRunCloudWatchAssociation:
+    Type: AWS::SSM::Association
+    Properties:
+      AssociationName: InitAndRunCloudWatchAssociation
+      Name: !Ref InitAndRunCloudWatchDocument
+      Targets:
+        - Key: InstanceIds
+          Values:
+            - !Ref RaiseTechApp
 
   RaiseTechApp:
     Type: AWS::EC2::Instance
@@ -171,7 +295,7 @@ Resources:
         - DeviceName: /dev/sdb
           VirtualName: ephemeral0
       ImageId: !Ref AMI
-      IamInstanceProfile: !Ref Ec2Role
+      IamInstanceProfile: !Ref RaiseTechAppInstanceProfile
       InstanceType: t3.micro
       KeyName: "raisetech-study"
       NetworkInterfaces:
@@ -181,60 +305,6 @@ Resources:
           SubnetId: !Ref PublicSubnet1
           GroupSet:
             - !Ref Ec2SG
-      UserData:
-        Fn::Base64: !Sub |
-          #!/bin/bash
-          dnf update -y
-          dnf -y localinstall https://dev.mysql.com/get/mysql84-community-release-el9-1.noarch.rpm
-          dnf -y install mysql-community-client
-          dnf -y install java-21-amazon-corretto-devel.x86_64
-          dnf -y install git
-          cd /home/ec2-user
-          git clone https://github.com/koujienami/aws-study.git
-          cd /home/ec2-user/aws-study
-          chown -R ec2-user:ec2-user /home/ec2-user/aws-study
-          chmod 755 gradlew
-
-          DB_USER=$(aws ssm get-parameter --query "Parameter.Value" --output text --name /raisetech-aws-study/db-master-user --region ${AWS::Region})
-          DB_PASS=$(aws ssm get-parameter --query "Parameter.Value" --output text --name /raisetech-aws-study/db-password --with-decryption --region ${AWS::Region})
-
-          mysql -h ${Rds.Endpoint.Address} -u ${!DB_USER} -p${!DB_PASS} -D raisetech_database << EOF_SQL
-          CREATE TABLE IF NOT EXISTS student (
-          id INT PRIMARY KEY AUTO_INCREMENT,
-          name VARCHAR(255) NOT NULL
-          );
-          INSERT IGNORE INTO student (id, name) VALUES ('1', 'Kouji Enami');
-          EOF_SQL
-
-          cat << EOF_ENV > /etc/sysconfig/app_env
-          SPRING_DATASOURCE_URL=jdbc:mysql://${Rds.Endpoint.Address}:${Rds.Endpoint.Port}/raisetech_database
-          SPRING_DATASOURCE_USERNAME=${!DB_USER}
-          SPRING_DATASOURCE_PASSWORD=${!DB_PASS}
-          EOF_ENV
-
-          chmod 600 /etc/sysconfig/app_env
-
-          cat << EOF_SYSTEMD > /etc/systemd/system/app.service
-          [Unit]
-          Description=Sample App
-          After=network.target
-
-          [Service]
-          User=ec2-user
-          WorkingDirectory=/home/ec2-user/aws-study
-          EnvironmentFile=/etc/sysconfig/app_env
-
-          ExecStart=/home/ec2-user/aws-study/gradlew bootRun
-          Restart=always
-          RestartSec=10
-
-          [Install]
-          WantedBy=multi-user.target
-          EOF_SYSTEMD
-
-          systemctl daemon-reload
-          systemctl enable app.service
-          systemctl start app.service
       Tags:
         - Key: Name
           Value: raise-tech-ec2
@@ -319,3 +389,133 @@ Resources:
         - Key: Name
           Value: raise-tech-db
     DeletionPolicy: Delete # スナップショットを残さない
+
+  Ec2CpuUtilizationAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      ### 基本設定
+      AlarmName: high-cpu-utilization
+
+      ### メトリクス
+      Namespace: AWS/EC2
+      Dimensions:
+        - Name: InstanceId
+          Value: !Ref RaiseTechApp
+      MetricName: CPUUtilization
+      Unit: Percent
+
+      ### 統計
+      Period: 300
+      Statistic: "Average"
+
+      ### 評価
+      Threshold: !Ref Threshold
+      ComparisonOperator: "GreaterThanOrEqualToThreshold"
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      TreatMissingData: "missing"
+
+      ### アクション
+      ActionsEnabled: "true"
+      AlarmActions:
+        - !Ref AlarmTopic
+
+  AlarmTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: AwsStudyEc2CpuAlarm
+
+  EmailSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Endpoint: bell.tsaeb.shoji@gmail.com
+      Protocol: email
+      TopicArn: !Ref AlarmTopic
+
+  LoadBalancerWebACL:
+    Type: AWS::WAFv2::WebACL
+    Properties:
+      DefaultAction:
+        Allow: {}
+      Description: Protect with core rules
+      Name: LoadBalancerWebACL
+      Rules:
+        - Name: CoreRuleSet
+          Priority: 0
+          OverrideAction:
+            None: {}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesCommonRuleSet
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: CoreRuleSet
+
+      Scope: REGIONAL
+      Tags:
+        - Key: Name
+          Value: load-balancer-waf
+      VisibilityConfig:
+        SampledRequestsEnabled: true
+        CloudWatchMetricsEnabled: true
+        MetricName: LoadBalancerWebACL
+
+  WebACLAssociation:
+    Type: 'AWS::WAFv2::WebACLAssociation'
+    Properties:
+      WebACLArn: !GetAtt LoadBalancerWebACL.Arn
+      ResourceArn: !GetAtt RaiseTechApplicationLoadBalancer.LoadBalancerArn
+
+  WAFLogConfig:
+    Type: AWS::WAFv2::LoggingConfiguration
+    Properties:
+      LogDestinationConfigs:
+        - !GetAtt WebACLLogGroup.Arn
+      ResourceArn: !GetAtt LoadBalancerWebACL.Arn
+
+  WebACLLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      DeletionProtectionEnabled: false
+      LogGroupClass: STANDARD
+      LogGroupName: aws-waf-logs-alb-acl
+      RetentionInDays: 1
+      Tags:
+        - Key: Name
+          Value: aws-waf-logs-alb-acl
+
+  # 以下のポリシーはなくても動くためコメントアウト
+  # WAFToCWLogsPolicy:
+  #   Type: AWS::Logs::ResourcePolicy
+  #   Properties:
+  #     PolicyName: WAFToCWLogsPolicy
+  #     PolicyDocument:
+  #       Fn::Sub:
+  #         - |
+  #           {
+  #             "Version": "2012-10-17",
+  #             "Statement": [
+  #               {
+  #                 "Effect": "Allow",
+  #                 "Principal": {
+  #                   "Service": "delivery.logs.amazonaws.com"
+  #                 },
+  #                 "Action": [
+  #                   "logs:CreateLogStream",
+  #                   "logs:PutLogEvents"
+  #                 ],
+  #                 "Resource": "${CloudWatchLogsLogGroupArn}",
+  #                 "Condition": {
+  #                   "StringEquals": {
+  #                     "aws:SourceAccount": "${AWS::AccountId}"
+  #                   },
+  #                   "ArnLike": {
+  #                     "aws:SourceArn": "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:*"
+  #                   }
+  #                 }
+  #               }
+  #             ]
+  #           }
+  #         - CloudWatchLogsLogGroupArn: !GetAtt WebACLLogGroup.Arn
