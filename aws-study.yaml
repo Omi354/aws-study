@@ -486,35 +486,36 @@ Resources:
         - Key: Name
           Value: aws-waf-logs-alb-acl
 
-  WAFToCWLogsPolicy:
-    Type: AWS::Logs::ResourcePolicy
-    Properties:
-      PolicyName: WAFToCWLogsPolicy
-      PolicyDocument:
-        Fn::Sub:
-          - |
-            {
-              "Version": "2012-10-17",
-              "Statement": [
-                {
-                  "Effect": "Allow",
-                  "Principal": {
-                    "Service": "delivery.logs.amazonaws.com"
-                  },
-                  "Action": [
-                    "logs:CreateLogStream",
-                    "logs:PutLogEvents"
-                  ],
-                  "Resource": "${CloudWatchLogsLogGroupArn}",
-                  "Condition": {
-                    "StringEquals": {
-                      "aws:SourceAccount": "${AWS::AccountId}"
-                    },
-                    "ArnLike": {
-                      "aws:SourceArn": "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:*"
-                    }
-                  }
-                }
-              ]
-            }
-          - CloudWatchLogsLogGroupArn: !GetAtt WebACLLogGroup.Arn
+  # 以下のポリシーはなくても動くためコメントアウト
+  # WAFToCWLogsPolicy:
+  #   Type: AWS::Logs::ResourcePolicy
+  #   Properties:
+  #     PolicyName: WAFToCWLogsPolicy
+  #     PolicyDocument:
+  #       Fn::Sub:
+  #         - |
+  #           {
+  #             "Version": "2012-10-17",
+  #             "Statement": [
+  #               {
+  #                 "Effect": "Allow",
+  #                 "Principal": {
+  #                   "Service": "delivery.logs.amazonaws.com"
+  #                 },
+  #                 "Action": [
+  #                   "logs:CreateLogStream",
+  #                   "logs:PutLogEvents"
+  #                 ],
+  #                 "Resource": "${CloudWatchLogsLogGroupArn}",
+  #                 "Condition": {
+  #                   "StringEquals": {
+  #                     "aws:SourceAccount": "${AWS::AccountId}"
+  #                   },
+  #                   "ArnLike": {
+  #                     "aws:SourceArn": "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:*"
+  #                   }
+  #                 }
+  #               }
+  #             ]
+  #           }
+  #         - CloudWatchLogsLogGroupArn: !GetAtt WebACLLogGroup.Arn
